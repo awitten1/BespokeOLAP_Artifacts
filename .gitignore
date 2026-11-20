@@ -23,6 +23,9 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+# multi-threaded runner (run_mt.py) outputs
+build_mt/
+results/
 develop-eggs/
 dist/
 downloads/

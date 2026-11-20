@@ -27,12 +27,16 @@ uv sync
 
 ## 🚀 Build & Run
 
-The provided `run.py` script compiles and executes the generated C++ code.
+Two runner scripts compile and execute the generated C++ code:
 
-> **⚠️ Note:** `run.py` currently supports the **single-threaded** implementations only (`tpch`, `ceb`). Runners for the multi-threaded TPC-H and CEB variants are currently not included but can easily be added.
+| Script | Variants | Execution model |
+|---|---|---|
+| `run.py` | `bespoke_tpch/`, `bespoke_ceb/` | single-threaded, via the `bespoke-olap` FastTest/plugin harness |
+| `run_mt.py` | `bespoke_tpch_multithreading/`, `bespoke_ceb_multithreading/` | multi-threaded, standalone driver |
 
 ```bash
-python run.py [--sf <scale_factor>] [--no-optimize] {tpch,ceb}
+python run.py    [--sf <scale_factor>] [--no-optimize] {tpch,ceb}
+python run_mt.py [--sf <scale_factor>] [--no-optimize] [--parquet-dir DIR] [--build-only] {tpch,ceb}
 ```
 
 ### Options
@@ -40,18 +44,45 @@ python run.py [--sf <scale_factor>] [--no-optimize] {tpch,ceb}
 | Argument | Description | Default |
 |---|---|---|
 | `benchmark` | Benchmark to run (`tpch` or `ceb`) | *(required)* |
-| `--sf` | TPC-H scale factor | `1` |
-| `--no-optimize` | Disable compiler optimizations | *(optimizations enabled)* |
+| `--sf` | Scale factor | `1` |
+| `--no-optimize` | Disable compiler optimizations (`-O0` instead of `-O3`) | *(optimizations enabled)* |
+| `--parquet-dir` | *(run_mt.py only)* Override the parquet base dir | `/mnt/labstore/bespoke_olap/<dataset>_parquet` |
+| `--build-only` | *(run_mt.py only)* Compile the engine but do not run it | *(build and run)* |
 
 ### Examples
 
 ```bash
-# TPC-H at scale factor 20
+# single-threaded TPC-H at scale factor 20
 python run.py --sf 20 tpch
 
-# CEB at default scale factor
-python run.py ceb
+# multi-threaded TPC-H at scale factor 20
+python run_mt.py --sf 20 tpch
 
-# TPC-H without compiler optimizations (no -O3)
-python run.py --no-optimize --sf 10 tpch
+# multi-threaded CEB
+python run_mt.py ceb
 ```
+
+### How `run_mt.py` works
+
+The multi-threaded artifacts are a self-contained engine with a different
+driver contract than the single-threaded harness, so `run_mt.py` does not reuse
+the `bespoke-olap` plugin machinery. On each run it:
+
+1. Generates query instantiations with the same generator `run.py` uses.
+2. Writes three shim files into `bespoke_<benchmark>_multithreading/build_mt/`
+   that the artifacts assume but do not ship: `trace.hpp` (no-op tracing
+   macros), `query_api.hpp` (defines `QueryResult`), and a `main.cpp` driver
+   that loads the parquet tables, builds the database, reads query lines from
+   stdin and runs them.
+3. Compiles every implementation `.cpp` (excluding the `*_api.cpp` plugin
+   wrappers, which the standalone driver bypasses) plus the driver into
+   `build_mt/db_mt`, linked against Arrow/Parquet via `pkg-config`.
+4. Runs the engine, feeding the generated query lines on stdin. Per-query
+   result rows are written to `bespoke_<benchmark>_multithreading/results/result<N>.csv`,
+   and per-query timings are printed to stderr.
+
+> **⚠️ Platform:** the multi-threaded engine targets **Linux**. `cpu_affinity.cpp`
+> uses `<sched.h>`/`sched_setaffinity` and does not compile on macOS. Arrow and
+> Parquet must be discoverable via `pkg-config`, and the scale-factor parquet
+> data must exist under the parquet base dir (`.../sf<N>/`). Set `CXX` to pick a
+> specific C++20 compiler.
